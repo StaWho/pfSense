@@ -20,7 +20,9 @@ const TECH         = 'openvpn_udp';   // or openvpn_tcp, match your client's pro
 const CACHE_TTL    = 900;             // seconds to keep the server list cached
 const PAGE_LIMIT   = 50;              // servers shown before "Show all"
 const SELF         = 'nordvpn_switch.php';
-const VERSION      = '1.2.0';         // bump this when you change the script
+const VERSION      = '1.4.0';         // bump this when you change the script
+const AUTO_REFRESH_SECS = 5;          // delay between automatic status checks while connecting
+const AUTO_REFRESH_MAX  = 5;          // maximum number of automatic checks
 
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
 
@@ -227,6 +229,12 @@ if ($idx !== null) {
         }
     }
 }
+
+/* ---- auto-refresh while connecting (limited number of checks) ---- */
+$ar = max(0, (int)($_GET['ar'] ?? 0));          // automatic refreshes done so far
+$autorefresh = ($label === 'Connecting' && $ar < AUTO_REFRESH_MAX);
+$next = ['view' => $view, 'country' => $country, 'group' => $group, 'ar' => $ar + 1];
+if ($showall) { $next['all'] = 1; }
 ?>
 <div class="panel panel-default">
   <div class="panel-heading">
@@ -267,6 +275,19 @@ if ($idx !== null) {
     </table>
     <a class="btn btn-default btn-sm" href="<?= h(url(['view' => $view, 'country' => $country, 'group' => $group])) ?>">Refresh status</a>
     <small>After switching servers, wait about 10 seconds, then refresh.</small>
+    <?php if ($autorefresh): ?>
+      <p class="text-warning" style="margin-top:8px">
+        Connecting&hellip; checking again in <?= (int)AUTO_REFRESH_SECS ?> seconds
+        (automatic check <?= $ar + 1 ?> of <?= (int)AUTO_REFRESH_MAX ?>).
+      </p>
+      <script>
+        setTimeout(function () { window.location.href = <?= json_encode(url($next)) ?>; }, <?= (int)AUTO_REFRESH_SECS * 1000 ?>);
+      </script>
+    <?php elseif ($label === 'Connecting'): ?>
+      <p class="text-warning" style="margin-top:8px">
+        Still connecting after <?= (int)AUTO_REFRESH_MAX ?> automatic checks. Tap Refresh status to check again.
+      </p>
+    <?php endif; ?>
     <?php if (!empty($_GET['debug']) && $st !== null): ?>
       <pre style="margin-top:10px"><?= h(print_r($st, true)) ?></pre>
     <?php endif; ?>
@@ -286,6 +307,8 @@ if ($idx !== null) {
   </div>
 </div>
 
+<div class="row">
+  <div class="col-md-6">
 <div class="panel panel-default">
   <div class="panel-heading"><h2 class="panel-title">Browse by country</h2></div>
   <div class="panel-body">
@@ -328,7 +351,8 @@ if ($idx !== null) {
     </script>
   </div>
 </div>
-
+  </div>
+  <div class="col-md-6">
 <div class="panel panel-default">
   <div class="panel-heading"><h2 class="panel-title">Browse by type</h2></div>
   <div class="panel-body">
@@ -343,6 +367,8 @@ if ($idx !== null) {
       <br>
       <button class="btn btn-primary" type="submit">Show countries</button>
     </form>
+  </div>
+</div>
   </div>
 </div>
 
