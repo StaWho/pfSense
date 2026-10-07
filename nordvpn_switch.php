@@ -20,9 +20,36 @@ const TECH         = 'openvpn_udp';   // or openvpn_tcp, match your client's pro
 const CACHE_TTL    = 900;             // seconds to keep the server list cached
 const PAGE_LIMIT   = 50;              // servers shown before "Show all"
 const SELF         = 'nordvpn_switch.php';
-const VERSION      = '1.0.0';         // bump this when you change the script
+const VERSION      = '1.2.0';         // bump this when you change the script
 
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES); }
+
+function fmt_bytes($n) {
+    $n = (float)$n;
+    foreach (['B', 'KB', 'MB', 'GB', 'TB'] as $u) {
+        if ($n < 1024 || $u === 'TB') { return round($n, $u === 'B' ? 0 : 1) . ' ' . $u; }
+        $n /= 1024;
+    }
+}
+
+/*
+ * Live status of our OpenVPN client from pfSense's own status code.
+ * Returns the client's status array, or null if it can't be determined.
+ */
+function vpn_live_status($vpnid, $descr) {
+    if (!function_exists('openvpn_get_active_clients')) { return null; }
+    try {
+        foreach (openvpn_get_active_clients() as $c) {
+            if ($vpnid !== null && (string)($c['vpnid'] ?? '') === (string)$vpnid) { return $c; }
+        }
+        foreach (openvpn_get_active_clients() as $c) {   // fallback: match by name
+            if ($descr !== '' && stripos((string)($c['name'] ?? ''), $descr) !== false) { return $c; }
+        }
+    } catch (Throwable $e) {
+        return null;
+    }
+    return null;
+}
 
 /*
  * Download the full server list once, keep only online servers that support TECH,
@@ -154,7 +181,98 @@ include("head.inc");
 
 if ($msg) { print_info_box(h($msg), $msgtype); }
 $current = $idx !== null ? ($a_client[$idx]['server_addr'] ?? '?') : '-';
+
+/* ---- live connection status ---- */
+function vpn_state($raw) {
+    // pfSense 2.9 reports text like "Connected (Success)"; older versions report "up"/"down"
+    $r = strtolower(trim((string)$raw));
+    if ($r === '' || preg_match('/(down|disconnected|exiting|error|failed)/', $r)) {
+        return ['Disconnected', 'danger'];
+    }
+    if ($r === 'up' || preg_match('/^connected\b/', $r)) {
+        return ['Connected', 'success'];
+    }
+    return ['Connecting', 'warning'];
+}
+
+function pick($arr, $keys) {
+    foreach ($keys as $k) {
+        if (isset($arr[$k]) && $arr[$k] !== '') { return $arr[$k]; }
+    }
+    return '';
+}
+
+function addr_port($arr, $hostkeys, $portkeys) {
+    $host = pick($arr, $hostkeys);
+    $port = pick($arr, $portkeys);
+    return $host === '' ? '' : $host . ($port !== '' ? ':' . $port : '');
+}
+
+$colors = ['success' => '#5cb85c', 'warning' => '#f0ad4e', 'danger' => '#d9534f', 'default' => '#777777'];
+$st = null;
+$label = 'Unknown';
+$labelclass = 'default';
+$note = 'No status information for this client.';
+if ($idx !== null) {
+    if (isset($a_client[$idx]['disable'])) {
+        $label = 'Disconnected';
+        $labelclass = 'danger';
+        $note = 'This OpenVPN client is disabled in pfSense.';
+    } else {
+        $st = vpn_live_status($a_client[$idx]['vpnid'] ?? null, CLIENT_DESCR);
+        if ($st === null) {
+            $label = 'Status unavailable';
+        } else {
+            list($label, $labelclass) = vpn_state($st['status'] ?? '');
+        }
+    }
+}
 ?>
+<div class="panel panel-default">
+  <div class="panel-heading">
+    <h2 class="panel-title">
+      Client Instance Statistics
+      <span class="label" style="background-color:<?= h($colors[$labelclass]) ?>;color:#fff;font-size:90%;margin-left:8px"><?= h($label) ?></span>
+    </h2>
+  </div>
+  <div class="panel-body table-responsive">
+    <table class="table table-striped table-hover table-condensed">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Last Change</th>
+          <th>Local Address</th>
+          <th>Virtual Address</th>
+          <th>Remote Host</th>
+        </tr>
+      </thead>
+      <tbody>
+      <?php if ($st !== null):
+          $vpnid  = $a_client[$idx]['vpnid'] ?? ($st['vpnid'] ?? '');
+          $rawst  = trim((string)($st['status'] ?? ''));
+      ?>
+        <tr>
+          <td>ovpnc<?= h($vpnid) ?><br><?= h($st['name'] ?? CLIENT_DESCR) ?></td>
+          <td><?= h($rawst !== '' ? $rawst : 'down') ?></td>
+          <td><?= h(pick($st, ['connect_time', 'last_change', 'time'])) ?></td>
+          <td><?= h(addr_port($st, ['local_host', 'local', 'local_addr'], ['local_port'])) ?></td>
+          <td><?= h(pick($st, ['virtual_addr', 'virtual_address'])) ?></td>
+          <td><?= h(addr_port($st, ['remote_host', 'remote'], ['remote_port'])) ?></td>
+        </tr>
+      <?php else: ?>
+        <tr><td colspan="6"><?= h($note) ?></td></tr>
+      <?php endif; ?>
+      </tbody>
+    </table>
+    <a class="btn btn-default btn-sm" href="<?= h(url(['view' => $view, 'country' => $country, 'group' => $group])) ?>">Refresh status</a>
+    <small>After switching servers, wait about 10 seconds, then refresh.</small>
+    <?php if (!empty($_GET['debug']) && $st !== null): ?>
+      <pre style="margin-top:10px"><?= h(print_r($st, true)) ?></pre>
+    <?php endif; ?>
+  </div>
+</div>
+
 <div class="panel panel-default">
   <div class="panel-heading">
     <h2 class="panel-title">Current server: <?= h($current) ?></h2>
